@@ -77,9 +77,12 @@ class TSLocalWindow:
         self.password.setEchoMode(QLineEdit.EchoMode.Password)
         self.environment = QComboBox()
         self.environment.addItems(["demo", "live"])
-        self.app_id = QLineEdit("TS-Local")
+        self.app_id = QLineEdit()
+        self.app_id.setPlaceholderText("Optional — only if Tradovate issued an API App ID / key")
         self.cid = QLineEdit()
+        self.cid.setPlaceholderText("Optional — only if Tradovate issued a CID")
         self.api_secret = QLineEdit()
+        self.api_secret.setPlaceholderText("Optional — only if Tradovate issued an API secret")
         self.api_secret.setEchoMode(QLineEdit.EchoMode.Password)
         self.connect_button = QPushButton("Save + Connect")
         self.connect_button.clicked.connect(self._save_and_connect)
@@ -87,7 +90,7 @@ class TSLocalWindow:
         connection_form.addRow("Username", self.username)
         connection_form.addRow("Password", self.password)
         connection_form.addRow("Environment", self.environment)
-        connection_form.addRow("App ID", self.app_id)
+        connection_form.addRow("App ID / API key (optional)", self.app_id)
         connection_form.addRow("CID (optional)", self.cid)
         connection_form.addRow("API secret (optional)", self.api_secret)
         connection_form.addRow("", self.connect_button)
@@ -171,7 +174,7 @@ class TSLocalWindow:
                 username=self.username.text(),
                 password=self.password.text(),
                 environment=self.environment.currentText(),
-                app_id=self.app_id.text(),
+                app_id=self.app_id.text() or None,
                 cid=self.cid.text() or None,
                 secret=self.api_secret.text() or None,
             )
