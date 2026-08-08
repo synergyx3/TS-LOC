@@ -23,10 +23,11 @@ class NeverLiveExecutor:
 class SessionState:
     running: bool
     error: str | None = None
+    status: str | None = None
 
 
 class DryRunLeaderSession:
-    """Runs the leader websocket on a background asyncio loop for the desktop UI."""
+    """Runs the resilient leader websocket on a background asyncio loop."""
 
     def __init__(
         self,
@@ -45,7 +46,7 @@ class DryRunLeaderSession:
         self.on_state = on_state
         self._thread: threading.Thread | None = None
         self._loop: asyncio.AbstractEventLoop | None = None
-        self._stop: asyncio.Event | None = None
+        self._stream: LeaderOrderStream | None = None
 
     @property
     def running(self) -> bool:
@@ -54,14 +55,18 @@ class DryRunLeaderSession:
     def start(self) -> None:
         if self.running:
             return
-        self._thread = threading.Thread(target=self._thread_main, name="ts-local-dry-run", daemon=True)
+        self._thread = threading.Thread(
+            target=self._thread_main,
+            name="ts-local-dry-run",
+            daemon=True,
+        )
         self._thread.start()
 
     def stop(self) -> None:
         loop = self._loop
-        stop = self._stop
-        if loop is not None and stop is not None:
-            loop.call_soon_threadsafe(stop.set)
+        stream = self._stream
+        if loop is not None and stream is not None:
+            asyncio.run_coroutine_threadsafe(stream.close(), loop)
 
     def _emit(self, state: SessionState) -> None:
         if self.on_state is not None:
@@ -71,14 +76,14 @@ class DryRunLeaderSession:
         try:
             asyncio.run(self._run())
         except Exception as exc:
-            self._emit(SessionState(False, str(exc)))
+            self._emit(SessionState(False, str(exc), "Listener failed"))
         finally:
             self._loop = None
-            self._stop = None
+            self._stream = None
+            self._thread = None
 
     async def _run(self) -> None:
         self._loop = asyncio.get_running_loop()
-        self._stop = asyncio.Event()
         client = self.manager.create_client(self.saved_login)
         bindings = [
             AccountBinding(int(account.account_id), account.id)
@@ -92,12 +97,16 @@ class DryRunLeaderSession:
             normalizer=normalizer,
             journal=self.journal,
         )
-        stream = LeaderOrderStream(client, runtime)
+
+        async def on_status(message: str) -> None:
+            self._emit(SessionState(True, status=message))
+
+        stream = LeaderOrderStream(client, runtime, on_status=on_status)
+        self._stream = stream
+        self._emit(SessionState(True, status="Listener starting"))
         try:
-            await stream.start()
-            self._emit(SessionState(True))
-            await self._stop.wait()
+            await stream.run_forever()
         finally:
             await stream.close()
             await client.aclose()
-            self._emit(SessionState(False))
+            self._emit(SessionState(False, status="Listener stopped"))
