@@ -35,8 +35,8 @@ DEMO = TradovateEnvironment(
 class TradovateCredentials:
     username: str
     password: str
-    app_id: str
-    app_version: str = "1.0.0"
+    app_id: str | None = None
+    app_version: str | None = None
     cid: str | None = None
     secret: str | None = None
     device_id: str | None = None
@@ -109,9 +109,11 @@ class TradovateClient:
             payload: dict[str, Any] = {
                 "name": self.credentials.username,
                 "password": self.credentials.password,
-                "appId": self.credentials.app_id,
-                "appVersion": self.credentials.app_version,
             }
+            if self.credentials.app_id:
+                payload["appId"] = self.credentials.app_id
+            if self.credentials.app_version:
+                payload["appVersion"] = self.credentials.app_version
             if self.credentials.cid:
                 payload["cid"] = self.credentials.cid
             if self.credentials.secret:
@@ -236,7 +238,6 @@ class TradovateWebSocket:
         await self._send_raw("authorize", 0, self.access_token)
 
     async def wait_closed(self) -> None:
-        """Wait for receiver/heartbeat termination and surface unexpected failures."""
         tasks = [task for task in (self._receiver, self._heartbeat) if task is not None]
         if not tasks:
             return
