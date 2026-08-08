@@ -17,8 +17,8 @@ class SavedLogin:
     label: str
     username: str
     environment: str
-    app_id: str
-    app_version: str = "1.0.0"
+    app_id: str | None = None
+    app_version: str | None = None
     cid: str | None = None
     device_id: str | None = None
 
@@ -55,8 +55,8 @@ class ConnectionManager:
                 label=row["label"],
                 username=row["username"],
                 environment=row["environment"],
-                app_id=row["app_id"],
-                app_version=row.get("app_version", "1.0.0"),
+                app_id=row.get("app_id") or None,
+                app_version=row.get("app_version") or None,
                 cid=row.get("cid"),
                 device_id=row.get("device_id"),
             )
@@ -70,23 +70,23 @@ class ConnectionManager:
         username: str,
         password: str,
         environment: str,
-        app_id: str,
-        app_version: str = "1.0.0",
+        app_id: str | None = None,
+        app_version: str | None = None,
         cid: str | None = None,
         secret: str | None = None,
         device_id: str | None = None,
         login_id: UUID | None = None,
     ) -> SavedLogin:
-        if not label.strip() or not username.strip() or not password or not app_id.strip():
-            raise ValueError("label, username, password and app_id are required")
+        if not label.strip() or not username.strip() or not password:
+            raise ValueError("label, username and password are required")
         env = self._environment(environment)
         entry = SavedLogin(
             id=login_id or uuid4(),
             label=label.strip(),
             username=username.strip(),
             environment=env.name,
-            app_id=app_id.strip(),
-            app_version=app_version.strip() or "1.0.0",
+            app_id=app_id.strip() if app_id and app_id.strip() else None,
+            app_version=app_version.strip() if app_version and app_version.strip() else None,
             cid=cid.strip() if cid else None,
             device_id=device_id.strip() if device_id else None,
         )
