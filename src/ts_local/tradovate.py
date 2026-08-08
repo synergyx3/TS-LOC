@@ -4,7 +4,8 @@ import asyncio
 import json
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Any, Awaitable, Callable
+from typing import Any
+from uuid import UUID, uuid4
 
 import httpx
 
@@ -169,12 +170,13 @@ class TradovateClient:
     async def me(self) -> dict[str, Any]:
         return await self.request("GET", "/auth/me")
 
-    async def accounts(self) -> list[TradovateAccount]:
+    async def accounts(self, login_id: UUID | None = None) -> list[TradovateAccount]:
         rows = await self.request("GET", "/account/list")
+        owner_id = login_id or uuid4()
         return [
             TradovateAccount(
-                id=__import__("uuid").uuid4(),
-                login_id=__import__("uuid").uuid4(),
+                id=uuid4(),
+                login_id=owner_id,
                 account_id=str(row["id"]),
                 name=str(row.get("name", row["id"])),
                 active=bool(row.get("active", True)),
@@ -182,12 +184,19 @@ class TradovateClient:
             for row in rows
         ]
 
-    def login_descriptor(self) -> TradovateLogin:
+    def login_descriptor(
+        self,
+        login_id: UUID | None = None,
+        *,
+        label: str | None = None,
+        accounts: tuple[TradovateAccount, ...] = (),
+    ) -> TradovateLogin:
         return TradovateLogin(
-            id=__import__("uuid").uuid4(),
-            label=self.credentials.username,
+            id=login_id or uuid4(),
+            label=label or self.credentials.username,
             username=self.credentials.username,
             environment=self.environment.name,
+            accounts=accounts,
         )
 
 
@@ -201,7 +210,6 @@ class TradovateWebSocket:
         self._request_id = 0
         self._pending: dict[int, asyncio.Future[Any]] = {}
         self._receiver: asyncio.Task[None] | None = None
-        self._subscriptions: list[tuple[str, dict[str, Any] | None]] = []
 
     async def connect(self) -> None:
         try:
