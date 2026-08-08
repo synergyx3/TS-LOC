@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import asyncio
 from decimal import Decimal, InvalidOperation
+from uuid import uuid4
 
 from .connections import ConnectionManager
-from .models import FollowerConfig, TradovateAccount
+from .journal import ExecutionJournal
+from .models import CopyGroup, FollowerConfig, TradovateAccount
 
 
 class TSLocalWindow:
@@ -14,6 +16,7 @@ class TSLocalWindow:
         self,
         accounts: list[TradovateAccount] | None = None,
         connection_manager: ConnectionManager | None = None,
+        journal: ExecutionJournal | None = None,
     ) -> None:
         try:
             from PySide6.QtWidgets import (
@@ -39,12 +42,14 @@ class TSLocalWindow:
         self._QTableWidgetItem = QTableWidgetItem
         self._QMessageBox = QMessageBox
         self._connection_manager = connection_manager
+        self._journal = journal
         self._accounts = list(accounts or [])
         self._copy_group_followers: list[FollowerConfig] = []
+        self._configured_group: CopyGroup | None = None
 
         self._window = QMainWindow()
         self._window.setWindowTitle("TS-Local")
-        self._window.resize(1180, 820)
+        self._window.resize(1240, 900)
         self._window.setStatusBar(QStatusBar())
         self._window.statusBar().showMessage("DRY RUN — no live orders will be submitted")
 
@@ -56,9 +61,9 @@ class TSLocalWindow:
         title.setStyleSheet("font-size: 24px; font-weight: 700;")
         header.addWidget(title)
         header.addStretch()
-        mode = QLabel("● DRY RUN")
-        mode.setStyleSheet("font-weight: 700;")
-        header.addWidget(mode)
+        self.mode_label = QLabel("● DRY RUN")
+        self.mode_label.setStyleSheet("font-weight: 700;")
+        header.addWidget(self.mode_label)
         layout.addLayout(header)
 
         connection_box = QGroupBox("Tradovate Connection")
@@ -106,22 +111,47 @@ class TSLocalWindow:
         self.multiplier.setSuffix("%")
         self.add_button = QPushButton("Add follower")
         self.add_button.clicked.connect(self._add_follower)
+        self.arm_button = QPushButton("Configure DRY RUN group")
+        self.arm_button.clicked.connect(self._configure_group)
+        self.group_status = QLabel("Not configured")
         form.addRow("Leader", self.leader)
         form.addRow("Follower", self.follower)
         form.addRow("Multiplier", self.multiplier)
         form.addRow("", self.add_button)
+        form.addRow("", self.arm_button)
+        form.addRow("Runtime", self.group_status)
         layout.addWidget(controls)
 
         self.followers_table = QTableWidget(0, 3)
         self.followers_table.setHorizontalHeaderLabels(["Follower", "Multiplier", "Enabled"])
         layout.addWidget(self.followers_table)
 
+        activity_box = QGroupBox("Recent Copy Activity")
+        activity_layout = QVBoxLayout(activity_box)
+        self.activity_table = QTableWidget(0, 7)
+        self.activity_table.setHorizontalHeaderLabels(
+            ["Time", "Symbol", "Side", "Leader Qty", "Follower", "Follower Qty", "Result"]
+        )
+        self.activity_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        self.refresh_activity_button = QPushButton("Refresh activity")
+        self.refresh_activity_button.clicked.connect(self._refresh_activity)
+        activity_layout.addWidget(self.activity_table)
+        activity_layout.addWidget(self.refresh_activity_button)
+        layout.addWidget(activity_box)
+
         self._window.setCentralWidget(root)
         self._refresh_accounts()
+        self._refresh_activity()
+
+    @property
+    def configured_group(self) -> CopyGroup | None:
+        return self._configured_group
 
     def _save_and_connect(self) -> None:
         if self._connection_manager is None:
-            self._QMessageBox.warning(self._window, "Connections unavailable", "No connection manager is configured.")
+            self._QMessageBox.warning(
+                self._window, "Connections unavailable", "No connection manager is configured."
+            )
             return
 
         self.connect_button.setEnabled(False)
@@ -146,10 +176,12 @@ class TSLocalWindow:
             self.password.clear()
             self.api_secret.clear()
 
-        existing_ids = {account.id for account in self._accounts}
+        existing_keys = {(account.login_id, account.account_id) for account in self._accounts}
         for account in login.accounts:
-            if account.id not in existing_ids:
+            key = (account.login_id, account.account_id)
+            if key not in existing_keys:
                 self._accounts.append(account)
+                existing_keys.add(key)
         self._refresh_accounts()
         self._window.statusBar().showMessage(
             f"Connected: {login.label} — {len(login.accounts)} account(s) discovered | DRY RUN"
@@ -209,6 +241,51 @@ class TSLocalWindow:
         self.followers_table.setItem(row, 0, self._QTableWidgetItem(self.follower.currentText()))
         self.followers_table.setItem(row, 1, self._QTableWidgetItem(f"{multiplier:g}x"))
         self.followers_table.setItem(row, 2, self._QTableWidgetItem("Enabled"))
+        self._configured_group = None
+        self.group_status.setText("Changed — configure again")
+
+    def _configure_group(self) -> None:
+        leader_id = self.leader.currentData()
+        if leader_id is None:
+            self._QMessageBox.warning(self._window, "No leader", "Connect and select a leader account first.")
+            return
+        if not self._copy_group_followers:
+            self._QMessageBox.warning(self._window, "No followers", "Add at least one follower account first.")
+            return
+
+        self._configured_group = CopyGroup(
+            id=uuid4(),
+            name="Desktop Copy Group",
+            leader_account_id=leader_id,
+            followers=tuple(self._copy_group_followers),
+            enabled=True,
+        )
+        self.group_status.setText(
+            f"DRY RUN configured — {len(self._copy_group_followers)} follower(s)"
+        )
+        self._window.statusBar().showMessage(
+            "Copy group configured in DRY RUN — live execution remains disabled"
+        )
+
+    def _refresh_activity(self) -> None:
+        self.activity_table.setRowCount(0)
+        if self._journal is None:
+            return
+        for item in self._journal.recent(100):
+            row = self.activity_table.rowCount()
+            self.activity_table.insertRow(row)
+            result = item.get("reason") or ("sent" if not item.get("skipped") else "skipped")
+            values = [
+                str(item.get("recorded_at", "")),
+                str(item.get("symbol", "")),
+                str(item.get("side", "")),
+                str(item.get("leader_quantity", "")),
+                str(item.get("follower_account_id", "")),
+                str(item.get("follower_quantity", "")),
+                str(result),
+            ]
+            for column, value in enumerate(values):
+                self.activity_table.setItem(row, column, self._QTableWidgetItem(value))
 
     def show(self) -> None:
         self._window.show()
