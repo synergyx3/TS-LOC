@@ -35,6 +35,20 @@ New leader `order` events are normalized into TS-Local `TradeEvent` objects. Dup
 
 Tradovate credentials and API secrets must never be committed to this repository. They are stored through the application's secure-store boundary.
 
+## Supported local bridge path
+
+NinjaTrader Desktop 8 exposes a documented Automated Trading Interface (ATI). Its File Interface accepts Order Instruction Files (OIF) in the local NinjaTrader `incoming` directory, so it is a legitimate non-public-API transport when the target account can be connected in NinjaTrader Desktop.
+
+TS-Local now includes a `NinjaTraderOifExecutor` adapter and an account-ID-to-NinjaTrader-account-name boundary. The adapter:
+
+- is disarmed by default and writes nothing until explicitly armed in code;
+- validates mapped account names and instrument text before serialization;
+- emits documented `PLACE` instructions using atomic same-directory renames;
+- supports market, limit and stop-market instructions, while failing closed on stop-limit orders until distinct stop and limit prices are modeled;
+- fails closed for missing mappings, directories and required prices.
+
+This bridge is not wired into the desktop controls yet, and live execution remains disabled. It does not make an account compatible with NinjaTrader Desktop; that must be confirmed with the provider and a demo connection first.
+
 ## Local journal
 
 Copy outcomes are stored in `%LOCALAPPDATA%\\TS-Local\\journal.sqlite3`. The desktop UI shows recent leader/follower activity, quantities, symbols, and whether each action was skipped because the application is in DRY RUN mode.
@@ -60,4 +74,9 @@ pytest
 ruff check .
 ```
 
-The next milestone is the first Tradovate demo integration test: confirm login/account discovery, start the background DRY RUN listener, place a small demo leader order, and verify the simulated follower action appears in the local activity journal. Live order submission remains disabled until demo integration testing passes.
+The next user checkpoint is two-part:
+
+1. In NinjaTrader Desktop 8, confirm the MFFU-provided account can be connected and appears by its exact account name. Do not enable TS-Local live execution.
+2. Run the existing Tradovate DRY RUN listener, place a small demo leader order, and verify the simulated follower action appears in the local activity journal.
+
+After those checks, the next development milestone is a UI setup/diagnostics screen that verifies the NinjaTrader incoming directory and account mappings, then writes a harmless bridge probe rather than an order. Live order submission remains disabled until demo integration and explicit arming controls are implemented and tested.
