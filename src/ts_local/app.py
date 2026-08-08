@@ -19,6 +19,7 @@ def main() -> int:
         raise SystemExit("Install the UI with: pip install -e '.[ui]'") from exc
 
     from .connections import ConnectionManager
+    from .journal import ExecutionJournal
     from .security import WindowsDPAPISecretStore
     from .ui import TSLocalWindow
 
@@ -27,9 +28,10 @@ def main() -> int:
         root / "connections.json",
         WindowsDPAPISecretStore(root / "secrets"),
     )
+    journal = ExecutionJournal(root / "journal.sqlite3")
 
     app = QApplication.instance() or QApplication(sys.argv)
-    window = TSLocalWindow(connection_manager=manager)
+    window = TSLocalWindow(connection_manager=manager, journal=journal)
     window.show()
     return app.exec()
 
