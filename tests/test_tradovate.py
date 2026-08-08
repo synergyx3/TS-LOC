@@ -1,57 +1,59 @@
+import asyncio
+import json
 from datetime import datetime, timezone
 
 import httpx
 import pytest
 
-from ts_local.tradovate import (
-    LIVE,
-    TradovateAuthError,
-    TradovateClient,
-    TradovateCredentials,
-)
+from ts_local.tradovate import LIVE, TradovateAuthError, TradovateClient, TradovateCredentials
 
 
-@pytest.mark.asyncio
-async def test_authenticate_parses_token_and_expiry(monkeypatch):
-    client = TradovateClient(
-        TradovateCredentials("alice", "secret", "TS-Local"),
-        LIVE,
-    )
+def test_authenticate_parses_token_and_expiry():
+    async def scenario() -> None:
+        client = TradovateClient(TradovateCredentials("alice", "secret", "TS-Local"), LIVE)
 
-    async def handler(request: httpx.Request) -> httpx.Response:
-        assert request.url.path.endswith("/auth/accesstokenrequest")
-        body = request.read().decode()
-        assert '"name":"alice"' in body
-        return httpx.Response(
-            200,
-            json={
-                "accessToken": "token-123",
-                "expirationTime": "2030-01-01T00:00:00Z",
-                "userId": 42,
-            },
+        async def handler(request: httpx.Request) -> httpx.Response:
+            payload = json.loads(request.content)
+            assert request.url.path.endswith("/auth/accesstokenrequest")
+            assert payload["name"] == "alice"
+            return httpx.Response(
+                200,
+                json={
+                    "accessToken": "token-123",
+                    "expirationTime": "2030-01-01T00:00:00Z",
+                    "userId": 42,
+                },
+            )
+
+        await client._http.aclose()
+        client._http = httpx.AsyncClient(
+            transport=httpx.MockTransport(handler), base_url=LIVE.rest_url
         )
 
-    await client._http.aclose()
-    client._http = httpx.AsyncClient(transport=httpx.MockTransport(handler), base_url=LIVE.rest_url)
+        token = await client.authenticate()
+        assert token.value == "token-123"
+        assert token.user_id == 42
+        assert token.expires_at == datetime(2030, 1, 1, tzinfo=timezone.utc)
+        await client.aclose()
 
-    token = await client.authenticate()
-    assert token.value == "token-123"
-    assert token.user_id == 42
-    assert token.expires_at == datetime(2030, 1, 1, tzinfo=timezone.utc)
-    await client.aclose()
+    asyncio.run(scenario())
 
 
-@pytest.mark.asyncio
-async def test_authentication_error_does_not_expose_password(monkeypatch):
-    client = TradovateClient(TradovateCredentials("alice", "SUPER-SECRET", "TS-Local"))
+def test_authentication_error_does_not_expose_password():
+    async def scenario() -> None:
+        client = TradovateClient(TradovateCredentials("alice", "SUPER-SECRET", "TS-Local"))
 
-    async def handler(_: httpx.Request) -> httpx.Response:
-        return httpx.Response(200, json={"errorText": "Invalid Credentials"})
+        async def handler(_: httpx.Request) -> httpx.Response:
+            return httpx.Response(200, json={"errorText": "Invalid Credentials"})
 
-    await client._http.aclose()
-    client._http = httpx.AsyncClient(transport=httpx.MockTransport(handler), base_url=LIVE.rest_url)
+        await client._http.aclose()
+        client._http = httpx.AsyncClient(
+            transport=httpx.MockTransport(handler), base_url=LIVE.rest_url
+        )
 
-    with pytest.raises(TradovateAuthError) as exc:
-        await client.authenticate()
-    assert "SUPER-SECRET" not in str(exc.value)
-    await client.aclose()
+        with pytest.raises(TradovateAuthError) as exc:
+            await client.authenticate()
+        assert "SUPER-SECRET" not in str(exc.value)
+        await client.aclose()
+
+    asyncio.run(scenario())
