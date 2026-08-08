@@ -7,7 +7,6 @@ import pytest
 
 from ts_local.connections import ConnectionManager
 from ts_local.models import TradovateAccount
-from ts_local.tradovate import AccessToken
 
 
 class MemorySecrets:
