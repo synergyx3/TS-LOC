@@ -10,12 +10,13 @@ from ts_local.tradovate import LIVE, TradovateAuthError, TradovateClient, Tradov
 
 def test_authenticate_parses_token_and_expiry():
     async def scenario() -> None:
-        client = TradovateClient(TradovateCredentials("alice", "secret", "TS-Local"), LIVE)
+        client = TradovateClient(TradovateCredentials("alice", "secret", "registered-app"), LIVE)
 
         async def handler(request: httpx.Request) -> httpx.Response:
             payload = json.loads(request.content)
             assert request.url.path.endswith("/auth/accesstokenrequest")
             assert payload["name"] == "alice"
+            assert payload["appId"] == "registered-app"
             return httpx.Response(
                 200,
                 json={
@@ -39,9 +40,35 @@ def test_authenticate_parses_token_and_expiry():
     asyncio.run(scenario())
 
 
+def test_authenticate_omits_unregistered_app_fields_when_not_provided():
+    async def scenario() -> None:
+        client = TradovateClient(TradovateCredentials("alice", "secret"), LIVE)
+
+        async def handler(request: httpx.Request) -> httpx.Response:
+            payload = json.loads(request.content)
+            assert payload == {"name": "alice", "password": "secret"}
+            return httpx.Response(
+                200,
+                json={
+                    "accessToken": "token-123",
+                    "expirationTime": "2030-01-01T00:00:00Z",
+                    "userId": 42,
+                },
+            )
+
+        await client._http.aclose()
+        client._http = httpx.AsyncClient(
+            transport=httpx.MockTransport(handler), base_url=LIVE.rest_url
+        )
+        await client.authenticate()
+        await client.aclose()
+
+    asyncio.run(scenario())
+
+
 def test_authentication_error_does_not_expose_password():
     async def scenario() -> None:
-        client = TradovateClient(TradovateCredentials("alice", "SUPER-SECRET", "TS-Local"))
+        client = TradovateClient(TradovateCredentials("alice", "SUPER-SECRET"))
 
         async def handler(_: httpx.Request) -> httpx.Response:
             return httpx.Response(200, json={"errorText": "Invalid Credentials"})
