@@ -1,5 +1,4 @@
 import time
-from pathlib import Path
 from uuid import uuid4
 
 from ts_local.connections import SavedLogin
@@ -28,8 +27,7 @@ class FakeClient:
         websocket_url = "wss://example.invalid"
 
 
-
-def test_session_surfaces_background_failure():
+def test_session_reports_reconnect_status_and_can_stop():
     login_id = uuid4()
     leader_id = uuid4()
     saved = SavedLogin(
@@ -59,8 +57,15 @@ def test_session_surfaces_background_failure():
     session.start()
 
     deadline = time.time() + 1
+    while time.time() < deadline:
+        if any(state.status and "reconnecting" in state.status for state in states):
+            break
+        time.sleep(0.01)
+
+    session.stop()
+    deadline = time.time() + 1
     while session.running and time.time() < deadline:
         time.sleep(0.01)
 
-    assert states
-    assert any(state.error and "auth failure" in state.error for state in states)
+    assert any(state.status and "reconnecting" in state.status for state in states)
+    assert session.running is False
