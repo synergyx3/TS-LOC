@@ -106,7 +106,7 @@ class ConnectionManager:
         self.secret_store.delete(self._secret_name(login_id, "password"))
         self.secret_store.delete(self._secret_name(login_id, "api_secret"))
 
-    async def connect(self, saved: SavedLogin) -> TradovateLogin:
+    def create_client(self, saved: SavedLogin) -> TradovateClient:
         password = self.secret_store.get(self._secret_name(saved.id, "password"))
         if not password:
             raise RuntimeError(f"No saved password for login '{saved.label}'")
@@ -120,7 +120,10 @@ class ConnectionManager:
             secret=api_secret,
             device_id=saved.device_id,
         )
-        client = self.client_factory(credentials, self._environment(saved.environment))
+        return self.client_factory(credentials, self._environment(saved.environment))
+
+    async def connect(self, saved: SavedLogin) -> TradovateLogin:
+        client = self.create_client(saved)
         try:
             await client.authenticate()
             accounts = tuple(await client.accounts(saved.id))
