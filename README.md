@@ -16,6 +16,8 @@ Local-first Windows desktop trade copier and journal built for personal use and 
 
 The Windows desktop shell is implemented with PySide6. It exposes saved Tradovate connections, discovered accounts, leader/follower selection, follower multipliers and a visible DRY RUN status.
 
+A configured copy group can now start a background DRY RUN leader listener from the desktop UI. The listener reads Tradovate leader order events, normalizes them, applies follower multipliers and safety limits, and records the simulated follower outcomes locally without submitting broker orders.
+
 ```powershell
 py -m venv .venv
 .\.venv\Scripts\Activate.ps1
@@ -32,6 +34,10 @@ The connector uses Tradovate REST for authentication, account discovery and cont
 New leader `order` events are normalized into TS-Local `TradeEvent` objects. Duplicate Tradovate order IDs are ignored so later/repeated socket messages cannot fan the same leader order out twice. Contract IDs are resolved to tradeable symbols before copying.
 
 Tradovate credentials and API secrets must never be committed to this repository. They are stored through the application's secure-store boundary.
+
+## Local journal
+
+Copy outcomes are stored in `%LOCALAPPDATA%\\TS-Local\\journal.sqlite3`. The desktop UI shows recent leader/follower activity, quantities, symbols, and whether each action was skipped because the application is in DRY RUN mode.
 
 ## Copier safety
 
@@ -54,4 +60,4 @@ pytest
 ruff check .
 ```
 
-The next milestone is wiring the desktop-selected copy group into the real-time stream and recording the simulated follower actions in the local journal. Live order submission remains disabled until demo integration testing passes.
+The next milestone is the first Tradovate demo integration test: confirm login/account discovery, start the background DRY RUN listener, place a small demo leader order, and verify the simulated follower action appears in the local activity journal. Live order submission remains disabled until demo integration testing passes.
