@@ -14,7 +14,7 @@ Local-first Windows desktop trade copier and journal built for personal use and 
 
 ## Desktop application
 
-The first Windows desktop shell is implemented with PySide6. It currently exposes the account/copy-group workflow and visibly starts in DRY RUN mode.
+The Windows desktop shell is implemented with PySide6. It exposes saved Tradovate connections, discovered accounts, leader/follower selection, follower multipliers and a visible DRY RUN status.
 
 ```powershell
 py -m venv .venv
@@ -27,9 +27,23 @@ python -m ts_local
 
 ## Tradovate integration
 
-The connector uses Tradovate's REST API for authentication/account discovery and its newline-delimited WebSocket protocol for real-time user synchronization. Production endpoints are selected by environment (`live` or `demo`).
+The connector uses Tradovate REST for authentication, account discovery and contract lookup, plus `user/syncrequest` over WebSocket for real-time user events. The socket sends the required client heartbeat every 2.5 seconds and subscribes only to the entity types needed by the copier.
 
-Tradovate credentials and API secrets must never be committed to this repository. Store them through the application's secure-store boundary once the desktop UI is wired up.
+New leader `order` events are normalized into TS-Local `TradeEvent` objects. Duplicate Tradovate order IDs are ignored so later/repeated socket messages cannot fan the same leader order out twice. Contract IDs are resolved to tradeable symbols before copying.
+
+Tradovate credentials and API secrets must never be committed to this repository. They are stored through the application's secure-store boundary.
+
+## Copier safety
+
+Live execution is still disabled by default. The copier currently enforces these guards even before a broker executor is allowed to go live:
+
+- leader account cannot also be a follower;
+- duplicate follower definitions are skipped;
+- disabled followers are skipped;
+- zero-quantity results are skipped;
+- each follower has a configurable hard maximum quantity cap (default: 20 contracts);
+- repeated websocket order IDs are idempotent;
+- DRY RUN never calls the broker order executor.
 
 ## Development
 
@@ -40,4 +54,4 @@ pytest
 ruff check .
 ```
 
-The live broker connector is deliberately separate from the copier engine. Live order submission will remain disabled until the execution layer has explicit safety limits and passes dry-run/integration testing.
+The next milestone is wiring the desktop-selected copy group into the real-time stream and recording the simulated follower actions in the local journal. Live order submission remains disabled until demo integration testing passes.
