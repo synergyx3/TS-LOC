@@ -5,6 +5,7 @@ from typing import Awaitable, Callable
 
 from .copier import CopyResult, TradeCopier
 from .events import EventNormalizationError, TradovateEventNormalizer
+from .journal import ExecutionJournal
 from .models import CopyGroup, TradeEvent
 
 
@@ -22,6 +23,7 @@ class CopierRuntime:
     copier: TradeCopier
     normalizer: TradovateEventNormalizer
     on_result: Callable[[TradeEvent, list[CopyResult]], Awaitable[None]] | None = None
+    journal: ExecutionJournal | None = None
     stats: RuntimeStats = field(default_factory=RuntimeStats)
 
     async def handle_socket_message(self, message: dict) -> None:
@@ -40,6 +42,9 @@ class CopierRuntime:
         results = await self.copier.copy(self.group, event)
         self.stats.copied_orders += sum(1 for result in results if not result.skipped)
         self.stats.skipped_orders += sum(1 for result in results if result.skipped)
+
+        if self.journal is not None and results:
+            self.journal.record(event, results)
 
         if self.on_result is not None:
             await self.on_result(event, results)
