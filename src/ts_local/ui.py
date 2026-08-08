@@ -7,6 +7,7 @@ from uuid import uuid4
 from .connections import ConnectionManager
 from .journal import ExecutionJournal
 from .models import CopyGroup, FollowerConfig, TradovateAccount
+from .session import DryRunLeaderSession
 
 
 class TSLocalWindow:
@@ -46,6 +47,7 @@ class TSLocalWindow:
         self._accounts = list(accounts or [])
         self._copy_group_followers: list[FollowerConfig] = []
         self._configured_group: CopyGroup | None = None
+        self._session: DryRunLeaderSession | None = None
 
         self._window = QMainWindow()
         self._window.setWindowTitle("TS-Local")
@@ -113,12 +115,19 @@ class TSLocalWindow:
         self.add_button.clicked.connect(self._add_follower)
         self.arm_button = QPushButton("Configure DRY RUN group")
         self.arm_button.clicked.connect(self._configure_group)
+        self.start_button = QPushButton("Start DRY RUN listener")
+        self.start_button.clicked.connect(self._start_session)
+        self.stop_button = QPushButton("Stop listener")
+        self.stop_button.clicked.connect(self._stop_session)
+        self.stop_button.setEnabled(False)
         self.group_status = QLabel("Not configured")
         form.addRow("Leader", self.leader)
         form.addRow("Follower", self.follower)
         form.addRow("Multiplier", self.multiplier)
         form.addRow("", self.add_button)
         form.addRow("", self.arm_button)
+        form.addRow("", self.start_button)
+        form.addRow("", self.stop_button)
         form.addRow("Runtime", self.group_status)
         layout.addWidget(controls)
 
@@ -266,6 +275,56 @@ class TSLocalWindow:
         self._window.statusBar().showMessage(
             "Copy group configured in DRY RUN — live execution remains disabled"
         )
+
+    def _start_session(self) -> None:
+        if self._configured_group is None:
+            self._configure_group()
+        if self._configured_group is None:
+            return
+        if self._connection_manager is None or self._journal is None:
+            self._QMessageBox.warning(self._window, "Runtime unavailable", "Connection manager or journal is unavailable.")
+            return
+
+        leader = next(
+            (account for account in self._accounts if account.id == self._configured_group.leader_account_id),
+            None,
+        )
+        if leader is None:
+            self._QMessageBox.warning(self._window, "Leader unavailable", "The configured leader account is not connected.")
+            return
+        saved = next(
+            (item for item in self._connection_manager.list_saved() if item.id == leader.login_id),
+            None,
+        )
+        if saved is None:
+            self._QMessageBox.warning(self._window, "Login unavailable", "The leader login is not saved.")
+            return
+
+        if self._session is not None and self._session.running:
+            return
+        self._session = DryRunLeaderSession(
+            manager=self._connection_manager,
+            saved_login=saved,
+            accounts=self._accounts,
+            group=self._configured_group,
+            journal=self._journal,
+        )
+        self._session.start()
+        self.start_button.setEnabled(False)
+        self.stop_button.setEnabled(True)
+        self.group_status.setText("DRY RUN listener starting…")
+        self._window.statusBar().showMessage(
+            "DRY RUN listener starting — leader orders will be journaled, not sent"
+        )
+
+    def _stop_session(self) -> None:
+        if self._session is not None:
+            self._session.stop()
+        self.start_button.setEnabled(True)
+        self.stop_button.setEnabled(False)
+        self.group_status.setText("DRY RUN stopped")
+        self._window.statusBar().showMessage("DRY RUN listener stopped")
+        self._refresh_activity()
 
     def _refresh_activity(self) -> None:
         self.activity_table.setRowCount(0)
