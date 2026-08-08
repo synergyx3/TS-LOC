@@ -231,14 +231,27 @@ class TradovateWebSocket:
             raise RuntimeError("Install the websocket dependency with: pip install -e .") from exc
 
         self._ws = await websockets.connect(self.url, ping_interval=None)
-        self._receiver = asyncio.create_task(self._receive_loop())
-        self._heartbeat = asyncio.create_task(self._heartbeat_loop())
+        self._receiver = asyncio.create_task(self._receive_loop(), name="tradovate-receiver")
+        self._heartbeat = asyncio.create_task(self._heartbeat_loop(), name="tradovate-heartbeat")
         await self._send_raw("authorize", 0, self.access_token)
 
+    async def wait_closed(self) -> None:
+        """Wait for receiver/heartbeat termination and surface unexpected failures."""
+        tasks = [task for task in (self._receiver, self._heartbeat) if task is not None]
+        if not tasks:
+            return
+        done, _ = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+        for task in done:
+            if task.cancelled():
+                continue
+            exception = task.exception()
+            if exception is not None:
+                raise exception
+
     async def close(self) -> None:
-        for task in (self._receiver, self._heartbeat):
-            if task:
-                task.cancel()
+        tasks = [task for task in (self._receiver, self._heartbeat) if task is not None]
+        for task in tasks:
+            task.cancel()
         self._receiver = None
         self._heartbeat = None
         for future in self._pending.values():
@@ -248,6 +261,8 @@ class TradovateWebSocket:
         if self._ws:
             await self._ws.close()
             self._ws = None
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
 
     async def call(self, endpoint: str, body: dict[str, Any] | None = None) -> Any:
         if self._ws is None:
@@ -263,8 +278,6 @@ class TradovateWebSocket:
             self._pending.pop(request_id, None)
 
     async def subscribe_user(self) -> Any:
-        # One sync request per socket lifecycle. Limiting entity types reduces
-        # noise and makes the order-processing path easier to reason about.
         return await self.call(
             "user/syncrequest",
             {
