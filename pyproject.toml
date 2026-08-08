@@ -15,6 +15,9 @@ dependencies = [
 dev = ["pytest>=8,<9", "ruff>=0.6,<1"]
 ui = ["PySide6>=6.7,<7"]
 
+[project.scripts]
+ts-local = "ts_local.app:main"
+
 [build-system]
 requires = ["setuptools>=70"]
 build-backend = "setuptools.build_meta"
