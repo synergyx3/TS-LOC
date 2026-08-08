@@ -4,7 +4,7 @@ import asyncio
 import json
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, Awaitable, Callable
 from uuid import UUID, uuid4
 
 import httpx
@@ -184,6 +184,9 @@ class TradovateClient:
             for row in rows
         ]
 
+    async def contract(self, contract_id: int) -> dict[str, Any]:
+        return await self.request("GET", f"/contract/item?id={int(contract_id)}")
+
     def login_descriptor(
         self,
         login_id: UUID | None = None,
@@ -200,31 +203,48 @@ class TradovateClient:
         )
 
 
-class TradovateWebSocket:
-    """Protocol adapter for Tradovate's newline-delimited websocket API."""
+EventHandler = Callable[[dict[str, Any]], Awaitable[None]]
 
-    def __init__(self, url: str, access_token: str) -> None:
+
+class TradovateWebSocket:
+    """Protocol adapter for Tradovate's websocket API with heartbeat support."""
+
+    def __init__(
+        self,
+        url: str,
+        access_token: str,
+        on_event: EventHandler | None = None,
+    ) -> None:
         self.url = url
         self.access_token = access_token
+        self.on_event = on_event
         self._ws: Any = None
         self._request_id = 0
         self._pending: dict[int, asyncio.Future[Any]] = {}
         self._receiver: asyncio.Task[None] | None = None
+        self._heartbeat: asyncio.Task[None] | None = None
 
     async def connect(self) -> None:
         try:
             import websockets
         except ImportError as exc:
-            raise RuntimeError("Install the websocket extra: pip install -e '.[dev]'") from exc
+            raise RuntimeError("Install the websocket dependency with: pip install -e .") from exc
 
-        self._ws = await websockets.connect(self.url, ping_interval=20, ping_timeout=20)
-        await self._send_raw("authorize", 0, self.access_token)
+        self._ws = await websockets.connect(self.url, ping_interval=None)
         self._receiver = asyncio.create_task(self._receive_loop())
+        self._heartbeat = asyncio.create_task(self._heartbeat_loop())
+        await self._send_raw("authorize", 0, self.access_token)
 
     async def close(self) -> None:
-        if self._receiver:
-            self._receiver.cancel()
-            self._receiver = None
+        for task in (self._receiver, self._heartbeat):
+            if task:
+                task.cancel()
+        self._receiver = None
+        self._heartbeat = None
+        for future in self._pending.values():
+            if not future.done():
+                future.cancel()
+        self._pending.clear()
         if self._ws:
             await self._ws.close()
             self._ws = None
@@ -237,13 +257,39 @@ class TradovateWebSocket:
         future: asyncio.Future[Any] = asyncio.get_running_loop().create_future()
         self._pending[request_id] = future
         await self._send_raw(endpoint, request_id, json.dumps(body) if body else "")
-        return await asyncio.wait_for(future, timeout=20)
+        try:
+            return await asyncio.wait_for(future, timeout=20)
+        finally:
+            self._pending.pop(request_id, None)
 
-    async def subscribe_user(self, user_id: int) -> Any:
-        return await self.call("user/syncrequest", {"users": [user_id]})
+    async def subscribe_user(self) -> Any:
+        # One sync request per socket lifecycle. Limiting entity types reduces
+        # noise and makes the order-processing path easier to reason about.
+        return await self.call(
+            "user/syncrequest",
+            {
+                "splitResponses": True,
+                "entityTypes": [
+                    "account",
+                    "executionReport",
+                    "fill",
+                    "order",
+                    "orderStrategy",
+                    "position",
+                ],
+            },
+        )
 
     async def _send_raw(self, endpoint: str, request_id: int, payload: str) -> None:
+        if self._ws is None:
+            raise RuntimeError("WebSocket is not connected")
         await self._ws.send(f"{endpoint}\n{request_id}\n\n{payload}")
+
+    async def _heartbeat_loop(self) -> None:
+        while self._ws is not None:
+            await asyncio.sleep(2.5)
+            if self._ws is not None:
+                await self._ws.send("[]")
 
     async def _receive_loop(self) -> None:
         async for raw in self._ws:
@@ -252,6 +298,10 @@ class TradovateWebSocket:
             await self._handle_message(raw)
 
     async def _handle_message(self, raw: str) -> None:
+        if raw == "o" or raw.startswith("h"):
+            return
+        if raw.startswith("c"):
+            raise TradovateAPIError(f"Tradovate websocket closed: {raw}")
         if raw.startswith("a"):
             raw = raw[1:]
         try:
@@ -259,16 +309,21 @@ class TradovateWebSocket:
         except json.JSONDecodeError:
             return
         if not isinstance(messages, list):
-            return
+            messages = [messages]
+
         for message in messages:
+            if not isinstance(message, dict):
+                continue
             request_id = message.get("i")
-            if request_id is None:
-                continue
-            future = self._pending.pop(int(request_id), None)
-            if future is None or future.done():
-                continue
-            status = int(message.get("s", 500))
-            if status >= 400:
-                future.set_exception(TradovateAPIError(str(message.get("d", message))))
-            else:
-                future.set_result(message.get("d"))
+            if request_id is not None:
+                future = self._pending.get(int(request_id))
+                if future is not None and not future.done():
+                    status = int(message.get("s", 500))
+                    if status >= 400:
+                        future.set_exception(TradovateAPIError(str(message.get("d", message))))
+                    else:
+                        future.set_result(message.get("d"))
+                    continue
+
+            if self.on_event is not None and message.get("e"):
+                await self.on_event(message)
